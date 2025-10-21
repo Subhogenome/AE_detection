@@ -1,7 +1,7 @@
 import streamlit as st
 from langgraph.graph import StateGraph, END
 from langchain_groq import ChatGroq
-from langchain.schema import HumanMessage
+from langchain_core.schema import HumanMessage
 from pydantic import BaseModel
 from typing import Optional, Any
 import json
