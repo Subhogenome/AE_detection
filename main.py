@@ -19,19 +19,14 @@ class AgentState(BaseModel):
 
 # ---------- LLM Setup ----------
 api_key = st.secrets["api"]
-llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", temperature=0, api_key=api_key)
+llm = ChatGroq(model=st.secrets["model"], temperature=0, api_key=api_key)
 
 
 # ---------- Step 1: Classify Relation ----------
 def classify_relation(state: AgentState):
     template = PromptTemplate(
         input_variables=["text"],
-        template="""
-You are a biomedical classifier. Respond with only YES or NO.
-Does the text mention or imply a relationship between any drug and any adverse event?
-
-Text: {text}
-"""
+        template=st.secrets["prompt1"]
     )
     prompt = template.format(text=state.input_text.strip())
     response = llm.invoke(prompt)
@@ -47,11 +42,7 @@ def extract_drugs(state: AgentState):
 
     template = PromptTemplate(
         input_variables=["text"],
-        template="""
-Extract all drug names from the text.
-Output must be a JSON array of strings only. No explanation, no additional keys.
-Text: {text}
-"""
+        template=st.secrets["prompt2"]
     )
     prompt = template.format(text=state.input_text.strip())
     response = llm.invoke(prompt)
@@ -67,27 +58,7 @@ def extract_ae_for_drugs(state: AgentState):
 
     template = PromptTemplate(
         input_variables=["text", "drugs"],
-        template="""
-You are an adverse event extraction agent.
-For each drug listed below, extract only the adverse events mentioned in the text.
-Include the exact sentence where the AE is mentioned.
-
-Output must be STRICT JSON using:
-[
-  {{
-    "drug": "DrugName",
-    "adverse_events": [
-      {{
-        "event": "EventName",
-        "reference_sentence": "Sentence from text"
-      }}
-    ]
-  }}
-]
-
-Drugs: {drugs}
-Text: {text}
-"""
+        template=st.secrets["prompt3"]
     )
     prompt = template.format(text=state.input_text.strip(), drugs=state.drugs)
     response = llm.invoke(prompt)
