@@ -1,11 +1,13 @@
 import streamlit as st
 from langgraph.graph import StateGraph, END
 from langchain_groq import ChatGroq
-from langchain_core.schema import HumanMessage
+from langchain.prompts import PromptTemplate
 from pydantic import BaseModel
 from typing import Optional, Any
 import json
-import fitz  # PyMuPDF for PDF text extraction
+import fitz  # PyMuPDF
+import pandas as pd
+
 
 # ---------- Define Agent State ----------
 class AgentState(BaseModel):
@@ -22,14 +24,17 @@ llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", temperature=0,
 
 # ---------- Step 1: Classify Relation ----------
 def classify_relation(state: AgentState):
-    text = state.input_text
-    prompt = f"""
-You are a biomedical classifier. Analyze the text and respond with only YES or NO.
+    template = PromptTemplate(
+        input_variables=["text"],
+        template="""
+You are a biomedical classifier. Respond with only YES or NO.
 Does the text mention or imply a relationship between any drug and any adverse event?
+
 Text: {text}
-Respond strictly with YES or NO. No other words.
 """
-    response = llm([HumanMessage(content=prompt)])
+    )
+    prompt = template.format(text=state.input_text.strip())
+    response = llm.invoke(prompt)
     state.relation_flag = "YES" in response.content.upper()
     return state
 
@@ -40,14 +45,16 @@ def extract_drugs(state: AgentState):
         state.result = {"relation": False, "message": "No drug-AE relation found"}
         return state
 
-    text = state.input_text
-    prompt = f"""
+    template = PromptTemplate(
+        input_variables=["text"],
+        template="""
 Extract all drug names from the text.
 Output must be a JSON array of strings only. No explanation, no additional keys.
-Only return raw JSON.
 Text: {text}
 """
-    response = llm([HumanMessage(content=prompt)])
+    )
+    prompt = template.format(text=state.input_text.strip())
+    response = llm.invoke(prompt)
     state.drugs = response.content
     return state
 
@@ -58,11 +65,12 @@ def extract_ae_for_drugs(state: AgentState):
         state.result = {"relation": False, "message": "Drugs not found"}
         return state
 
-    text = state.input_text
-    prompt = f"""
+    template = PromptTemplate(
+        input_variables=["text", "drugs"],
+        template="""
 You are an adverse event extraction agent.
 For each drug listed below, extract only the adverse events mentioned in the text.
-For every adverse event, also include the exact sentence from the input text where that adverse event is mentioned.
+Include the exact sentence where the AE is mentioned.
 
 Output must be STRICT JSON using:
 [
@@ -77,10 +85,12 @@ Output must be STRICT JSON using:
   }}
 ]
 
-Drugs: {state.drugs}
+Drugs: {drugs}
 Text: {text}
 """
-    response = llm([HumanMessage(content=prompt)])
+    )
+    prompt = template.format(text=state.input_text.strip(), drugs=state.drugs)
+    response = llm.invoke(prompt)
     try:
         state.result = json.loads(response.content)
     except:
@@ -103,6 +113,7 @@ agent = graph.compile()
 
 
 # ---------- Streamlit UI ----------
+st.set_page_config(page_title="Drug–AE Extractor", layout="wide")
 st.title("💊 Biomedical Drug–Adverse Event Extractor")
 
 uploaded_pdf = st.file_uploader("📄 Upload a biomedical case report (PDF)", type=["pdf"])
@@ -123,7 +134,6 @@ if uploaded_pdf:
         result = output["result"]
 
         if isinstance(result, list):
-            # Display the structured result as a table
             st.success("✅ Extraction complete!")
 
             rows = []
@@ -137,10 +147,13 @@ if uploaded_pdf:
                     })
 
             if rows:
-                import pandas as pd
                 df = pd.DataFrame(rows)
                 st.dataframe(df, use_container_width=True)
-                st.download_button("⬇️ Download Results as CSV", df.to_csv(index=False), "drug_ae_results.csv")
+                st.download_button(
+                    "⬇️ Download Results as CSV",
+                    df.to_csv(index=False),
+                    "drug_ae_results.csv"
+                )
             else:
                 st.warning("No adverse events found.")
         else:
