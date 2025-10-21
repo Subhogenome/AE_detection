@@ -1,3 +1,8 @@
+
+
+
+
+
 import streamlit as st
 from langgraph.graph import StateGraph, END
 from langchain_groq import ChatGroq
@@ -9,19 +14,24 @@ import fitz  # PyMuPDF
 import pandas as pd
 
 
+# ---------- Authentication Configuration ----------
+# In production, use a proper database and hashed passwords
 # ---------- USERS FROM SECRETS ----------
 USERS = st.secrets["users"]
 
-
-# ---------- LOGIN FUNCTIONS ----------
+# ---------- Login Function ----------
 def check_login(username, password):
+    """Verify user credentials"""
     return username in USERS and USERS[username] == password
 
 
 def login_page():
+    """Display login page"""
     st.set_page_config(page_title="Login - Drug–AE Extractor", layout="centered")
     
+    # Center the login form
     col1, col2, col3 = st.columns([1, 2, 1])
+    
     with col2:
         st.markdown("""
         <div style='text-align: center; padding: 20px;'>
@@ -30,24 +40,41 @@ def login_page():
         </div>
         """, unsafe_allow_html=True)
         
-        st.subheader("🔐 Login")
-        username = st.text_input("Username", placeholder="Enter your username")
-        password = st.text_input("Password", type="password", placeholder="Enter your password")
-        if st.button("Login"):
-            if username and password:
-                if check_login(username, password):
-                    st.session_state.authenticated = True
-                    st.session_state.username = username
-                    st.success("✅ Login successful!")
-                    st.rerun()
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        with st.container():
+            st.subheader("🔐 Login")
+            
+            username = st.text_input("Username", placeholder="Enter your username")
+            password = st.text_input("Password", type="password", placeholder="Enter your password")
+            
+            col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+            with col_btn2:
+                login_button = st.button("Login", use_container_width=True, type="primary")
+            
+            if login_button:
+                if username and password:
+                    if check_login(username, password):
+                        st.session_state.authenticated = True
+                        st.session_state.username = username
+                        st.success("✅ Login successful!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid username or password")
                 else:
-                    st.error("❌ Invalid username or password")
-            else:
-                st.warning("⚠️ Please enter both username and password")
-        st.info("ℹ️ Demo credentials available in secrets.toml")
+                    st.warning("⚠️ Please enter both username and password")
+        
+        st.markdown("<br><br>", unsafe_allow_html=True)
+     
+        
+        st.markdown("""
+        <div style='text-align: center; padding: 20px; color: #888; font-size: 12px;'>
+            <p>Secure biomedical text analysis system</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 
-# ---------- AGENT STATE ----------
+# ---------- Define Agent State ----------
 class AgentState(BaseModel):
     input_text: str
     relation_flag: Optional[bool] = None
@@ -55,16 +82,13 @@ class AgentState(BaseModel):
     result: Optional[Any] = None
 
 
-# ---------- LLM SETUP ----------
+# ---------- LLM Setup ----------
 def initialize_llm():
-    return ChatGroq(
-        model=st.secrets["model"],
-        temperature=0,
-        api_key=st.secrets["api"]
-    )
+    api_key = st.secrets["api"]
+    return ChatGroq(model=st.secrets["model"], temperature=0, api_key=api_key)
 
 
-# ---------- STEP 1: CLASSIFY RELATION ----------
+# ---------- Step 1: Classify Relation ----------
 def classify_relation(state: AgentState):
     llm = initialize_llm()
     template = PromptTemplate(
@@ -77,7 +101,7 @@ def classify_relation(state: AgentState):
     return state
 
 
-# ---------- STEP 2: EXTRACT DRUGS ----------
+# ---------- Step 2: Extract Drugs ----------
 def extract_drugs(state: AgentState):
     if not state.relation_flag:
         state.result = {"relation": False, "message": "No drug-AE relation found"}
@@ -94,7 +118,7 @@ def extract_drugs(state: AgentState):
     return state
 
 
-# ---------- STEP 3: EXTRACT ADVERSE EVENTS ----------
+# ---------- Step 3: Extract Adverse Events ----------
 def extract_ae_for_drugs(state: AgentState):
     if not state.drugs:
         state.result = {"relation": False, "message": "Drugs not found"}
@@ -114,55 +138,26 @@ def extract_ae_for_drugs(state: AgentState):
     return state
 
 
-# ---------- STEP 4: VALIDATE JSON OUTPUT ----------
-def validate_json_output(state: AgentState):
-    if not state.result:
-        state.result = {"error": "No data to validate"}
-        return state
-
-    try:
-        data = state.result if isinstance(state.result, list) else json.loads(state.result)
-        for entry in data:
-            if "drug" not in entry or "adverse_events" not in entry:
-                raise ValueError("Missing keys in output")
-        state.result = data
-        return state
-    except Exception:
-        llm = initialize_llm()
-        template = PromptTemplate(
-            input_variables=["raw_json"],
-            template=st.secrets["prompt4"]
-        )
-        prompt = template.format(raw_json=str(state.result))
-        response = llm.invoke(prompt)
-        try:
-            state.result = json.loads(response.content)
-        except:
-            state.result = {"error": "Failed to validate/fix JSON", "raw": response.content}
-    return state
-
-
-# ---------- CREATE AGENT GRAPH ----------
+# ---------- LangGraph Assembly ----------
 def create_agent():
     graph = StateGraph(AgentState)
     graph.add_node("classify", classify_relation)
     graph.add_node("extract_drugs", extract_drugs)
     graph.add_node("extract_aes", extract_ae_for_drugs)
-    graph.add_node("validate_json", validate_json_output)  # ✅ new agent
 
     graph.set_entry_point("classify")
     graph.add_edge("classify", "extract_drugs")
     graph.add_edge("extract_drugs", "extract_aes")
-    graph.add_edge("extract_aes", "validate_json")
-    graph.add_edge("validate_json", END)
+    graph.add_edge("extract_aes", END)
 
     return graph.compile()
 
 
-# ---------- MAIN APP ----------
+# ---------- Main Application ----------
 def main_app():
     st.set_page_config(page_title="Drug–AE Extractor", layout="wide")
     
+    # Header with logout
     col1, col2 = st.columns([6, 1])
     with col1:
         st.title("💊 Biomedical Drug–Adverse Event Extractor")
@@ -196,6 +191,7 @@ def main_app():
 
             if isinstance(result, list):
                 st.success("✅ Extraction complete!")
+
                 rows = []
                 for drug_obj in result:
                     drug = drug_obj.get("drug", "")
@@ -205,6 +201,7 @@ def main_app():
                             "Adverse Event": ae.get("event", ""),
                             "Reference Sentence": ae.get("reference_sentence", "")
                         })
+
                 if rows:
                     df = pd.DataFrame(rows)
                     st.dataframe(df, use_container_width=True)
@@ -220,13 +217,15 @@ def main_app():
                 st.code(result, language="json")
 
 
-# ---------- APP ENTRY POINT ----------
+# ---------- App Entry Point ----------
 if __name__ == "__main__":
+    # Initialize session state
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if "username" not in st.session_state:
         st.session_state.username = None
 
+    # Route to appropriate page
     if st.session_state.authenticated:
         main_app()
     else:
