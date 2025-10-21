@@ -61,7 +61,7 @@ def login_page():
                     st.warning("⚠️ Please enter both username and password")
         
         st.markdown("<br><br>", unsafe_allow_html=True)
-        st.info("ℹ️ Demo credentials: admin/admin123 or researcher/research456")
+        st.info("ℹ️ Demo ")
         
         st.markdown("""
         <div style='text-align: center; padding: 20px; color: #888; font-size: 12px;'>
