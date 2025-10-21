@@ -11,10 +11,8 @@ import pandas as pd
 
 # ---------- Authentication Configuration ----------
 # In production, use a proper database and hashed passwords
-USERS = {
-    "admin": "admin123",
-    "researcher": "research456"
-}
+USERS = st.secrets["users"]
+
 
 
 # ---------- Login Function ----------
