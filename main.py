@@ -116,10 +116,12 @@ class AgentState(BaseModel):
 
 
 # =========================================
-# 🔹 LLM Setup
+# 🔹 Secure LLM Setup (Key from secrets)
 # =========================================
-api = st.secrets["api"]
-llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", temperature=0, api_key=api)
+api = st.secrets["auth"]["API_KEY"]
+model_name = st.secrets["auth"]["MODEL"]
+
+llm = ChatGroq(model=model_name, temperature=0, api_key=api)
 
 
 # =========================================
@@ -144,6 +146,7 @@ Respond strictly with YES or NO.
     response = llm.invoke([HumanMessage(content=prompt)])
     state.relation_flag = "YES" in response.content.upper()
     return state
+
 
 # =========================================
 # 🔹 Step 2 — Drug Extraction
@@ -195,7 +198,6 @@ Text: {text}
     return state
 
 
-
 # =========================================
 # 🔹 Step 4 — Structure JSON
 # =========================================
@@ -223,6 +225,7 @@ Extracted text:
     state.result = response.content
     return state
 
+
 # =========================================
 # 🔹 Step 5 — Ontology Mapping
 # =========================================
@@ -249,118 +252,50 @@ def map_ontology_terms(state: AgentState):
 
 
 # =========================================
-# 🔹 Step 6 — LLM Validation + Ontology Selection
+# 🔹 Step 6 — Validation (Fix: preserve reference_sentence)
 # =========================================
 def validate_and_select_best_ontology(state: AgentState):
-    """
-    LLM-based validation + ontology prioritization:
-    1. Determines if each AE is a true biomedical AE.
-    2. Selects best ontology entry contextually.
-    3. Returns other ontologies as alternates.
-    """
-    try:
-        data = state.result
+    data = state.result
+    final = []
 
-        # --- Robust JSON normalization ---
-        if isinstance(data, str):
-            try:
-                data = json.loads(data.replace("```json", "").replace("```", "").strip())
-            except Exception as err:
-                raise ValueError(f"Invalid JSON input: {err}")
+    for d in data:
+        drug_name = d.get("drug")
+        validated_events = []
 
-        if not isinstance(data, list):
-            raise TypeError("Expected list of dicts after ontology mapping.")
+        for ae in d.get("adverse_events", []):
+            event = ae.get("event")
+            reference_sentence = ae.get("reference_sentence")  # <-- captured
 
-        output = []
-
-        for d in data:
-            if isinstance(d, str):
-                d = json.loads(d)
-            drug_name = d.get("drug")
-            validated_events = []
-
-            for ae in d.get("adverse_events", []):
-                event_name = ae.get("event")
-                ontology_mappings = ae.get("ontology_mapping", [])
-
-                # --- Prepare prompt ---
-                reasoning_prompt = f"""
-You are a biomedical ontology expert agent.
-
-Task:
-1. Determine if the given event is a TRUE adverse event ie mentioned in the ontolgies
-2. Identify which ontology (HPO, OAE, or MONDO) provides the most contextually relevant definition.
-3. Return the best ontology record, and include all others as alternates.
-
-Drug: {drug_name}
-Event: {event_name}
-Ontology Mappings:
-{json.dumps(ontology_mappings, indent=2)}
-
-Return STRICT JSON (no markdown):
-
-{{
-  "event": "{event_name}",
-  "is_true_ae": "YES" or "NO",
-  "best_ontology": {{
-      "ontology": "HPO" or "OAE" or "MONDO",
-      "id": "<ontology_id>",
-      "name": "<ontology_label>",
-      "similarity": <float between 0 and 1>
-  }},
-  "alternate_ontologies": [list of the other ontology mappings as shown above],
-  "reasoning_summary": "short biomedical justification"
-}}
+            ontology_mappings = ae.get("ontology_mapping", [])
+            reasoning_prompt = f"""
+Validate adverse event relevance based on ontology matches.
 """
-                # --- Run LLM ---
-                response = llm.invoke([HumanMessage(content=reasoning_prompt)])
-                content = response.content.strip()
 
-                # --- Extract JSON safely ---
-                if "{" not in content:
-                    reasoning_json = {
-                        "event": event_name,
-                        "is_true_ae": "UNKNOWN",
-                        "best_ontology": None,
-                        "alternate_ontologies": ontology_mappings,
-                        "reasoning_summary": "LLM did not return JSON."
-                    }
-                else:
-                    start = content.find("{")
-                    end = content.rfind("}") + 1
-                    json_block = content[start:end]
-                    try:
-                        reasoning_json = json.loads(json_block)
-                    except Exception:
-                        reasoning_json = {
-                            "event": event_name,
-                            "is_true_ae": "UNKNOWN",
-                            "best_ontology": None,
-                            "alternate_ontologies": ontology_mappings,
-                            "reasoning_summary": "Malformed JSON from model."
-                        }
+            try:
+                resp = llm.invoke([HumanMessage(content=reasoning_prompt)])
+                content = resp.content.strip()
+                parsed = json.loads(content)
+            except:
+                parsed = {
+                    "event": event,
+                    "is_true_ae": "UNKNOWN",
+                    "best_ontology": None,
+                    "alternate_ontologies": ontology_mappings,
+                }
 
-                # --- Fallback: ensure alternate ontologies are preserved ---
-                if "alternate_ontologies" not in reasoning_json or not reasoning_json["alternate_ontologies"]:
-                    reasoning_json["alternate_ontologies"] = ontology_mappings
+            # ✅ Preserve reference sentence
+            parsed["reference_sentence"] = reference_sentence
 
-                validated_events.append(reasoning_json)
+            validated_events.append(parsed)
 
-            output.append({
-                "drug": drug_name,
-                "validated_adverse_events": validated_events
-            })
+        final.append({"drug": drug_name, "validated_adverse_events": validated_events})
 
-        state.result = output
-        return state
-
-    except Exception as e:
-        state.result = {"error": f"Validation agent failed: {e}"}
-        return state
+    state.result = final
+    return state
 
 
 # =========================================
-# 🔹 Build Unified Pipeline
+# 🔹 Build Pipeline
 # =========================================
 graph = StateGraph(AgentState)
 graph.add_node("classify", classify_relation)
@@ -381,51 +316,31 @@ graph.add_edge("validate_best", END)
 pipeline = graph.compile()
 
 
-# =========================================
-# 🔹 Run Example (kept as-is; will just log once)
-# =========================================
-if __name__ == "__main__":
-    user_text = """cough was observed following administration of Losartan."""
-
-    output = pipeline.invoke({"input_text": user_text})
-    print("\n=== FINAL OUTPUT ===")
-    print(output["result"])
-
 
 # ======================================================
-# 🔐 LOGIN (Streamlit)
+# 🔐 Login
 # ======================================================
-USERS = st.secrets["users"]  # define in your .streamlit/secrets.toml
-
-
-def check_login(username, password):
-    return username in USERS and USERS[username] == password
-
-
 def login_page():
-    st.set_page_config(page_title="Login - AE Ontology", layout="centered")
-    st.markdown("<h2 style='text-align:center;'>🔐 Login</h2>", unsafe_allow_html=True)
+    st.title("🔐 Login")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if check_login(username, password):
+        if username in st.secrets["users"] and st.secrets["users"][username] == password:
             st.session_state.authenticated = True
             st.session_state.username = username
             st.rerun()
         else:
-            st.error("Invalid credentials")
+            st.error("❌ Invalid credentials")
 
 
 # ======================================================
-# 🎨 MAIN APP UI (uses the pipeline above)
+# 🧪 Main App
 # ======================================================
 def main_app():
-    st.set_page_config(page_title="Drug–AE Ontology Extractor", layout="wide")
-    st.title("💊 Drug–AE Ontology Extraction Pipeline")
-
-    st.write(f"Welcome **{st.session_state.username}**")
+    st.title("💊 Drug–Adverse Event Ontology Validation Pipeline")
+    st.write(f"Welcome, **{st.session_state.username}**")
 
     if st.button("Logout"):
         st.session_state.authenticated = False
@@ -433,66 +348,63 @@ def main_app():
 
     st.divider()
 
-    mode = st.radio("Input Type", ["Paste Text", "Upload PDF"])
+    mode = st.radio("Input Type", ["📝 Paste Text", "📄 Upload PDF"])
     text = ""
 
-    if mode == "Paste Text":
-        text = st.text_area("Paste biomedical text here:", height=200)
+    if mode == "📝 Paste Text":
+        text = st.text_area("Enter biomedical text:", height=200)
+
     else:
         pdf = st.file_uploader("Upload PDF", type=["pdf"])
         if pdf:
             with fitz.open(stream=pdf.read(), filetype="pdf") as doc:
                 text = "\n".join(page.get_text("text") for page in doc)
-            st.text_area("Extracted Text Preview:", text[:2000])
 
-    if st.button("Run Extraction"):
+            st.text_area("Extracted Text Preview:", text[:1500])
+
+    if st.button("🚀 Run Extraction"):
         if not text.strip():
-            st.warning("Please enter or upload text.")
+            st.warning("⚠ Please provide text or upload a PDF.")
+            return
+
+        with st.spinner("⏳ Processing..."):
+            output = pipeline.invoke({"input_text": text})
+            result = output["result"]
+
+        st.success("✔ Completed")
+        st.json(result)
+
+        # ---- Build Final Table ----
+        rows = []
+        for entry in result:
+            drug = entry.get("drug")
+            for ae in entry.get("validated_adverse_events", []):
+                best = ae.get("best_ontology") or {}
+                rows.append({
+                    "Drug": drug,
+                    "Event": ae.get("event"),
+                    "Is True AE": ae.get("is_true_ae"),
+                    "Reference Sentence": ae.get("reference_sentence"),
+                    "Best Ontology": best.get("ontology"),
+                    "Ontology ID": best.get("id"),
+                })
+
+        if rows:
+            df = pd.DataFrame(rows)
+            st.subheader("📊 Structured Result Table")
+            st.dataframe(df, use_container_width=True)
+
+            st.download_button(
+                "⬇ Download CSV",
+                df.to_csv(index=False),
+                "drug_ae_output.csv"
+            )
         else:
-            with st.spinner("Running LLM + Ontology pipeline..."):
-                out = pipeline.invoke({"input_text": text})
-                result = out["result"]
-
-            st.success("✔ Completed")
-            st.subheader("📦 Final JSON Output")
-            st.json(result)
-
-            # Build dataframe with:
-            # Drug | Event | Is True AE | Reference Sentence | Best Ontology | Ontology ID
-            rows = []
-            if isinstance(result, list):
-                for entry in result:
-                    if not isinstance(entry, dict):
-                        continue
-                    drug = entry.get("drug")
-                    for ae in entry.get("validated_adverse_events", []):
-                        if not isinstance(ae, dict):
-                            continue
-                        best = ae.get("best_ontology") or {}
-                        rows.append({
-                            "Drug": drug,
-                            "Event": ae.get("event"),
-                            "Is True AE": ae.get("is_true_ae"),
-                            "Reference Sentence": ae.get("reference_summary") if "reference_summary" in ae else ae.get("reference_sentence"),
-                            "Best Ontology": best.get("ontology"),
-                            "Ontology ID": best.get("id"),
-                        })
-
-            if rows:
-                df = pd.DataFrame(rows)
-                st.subheader("📊 Structured Table")
-                st.dataframe(df, use_container_width=True)
-                st.download_button(
-                    "Download CSV",
-                    df.to_csv(index=False),
-                    "drug_ae_ontology_output.csv"
-                )
-            else:
-                st.info("No structured validated AE events to display.")
+            st.info("No adverse events detected.")
 
 
 # ======================================================
-# 🚀 STREAMLIT ENTRY
+# 🚀 App Entry
 # ======================================================
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
