@@ -200,7 +200,7 @@ def map_ontology_terms(state):
         return state
 
 
-# 🔥 FIXED VERSION: Only adds reference sentence & JSON resilience
+#  FIXED VERSION: Only adds reference sentence & JSON resilience
 def validate_and_select_best_ontology(state):
 
     data = state.result
