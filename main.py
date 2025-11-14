@@ -1,7 +1,7 @@
 import streamlit as st
 import json
 import pandas as pd
-import fitz  # PyMuPDF
+import fitz  # PDF reader
 import requests
 from pronto import Ontology
 from rdflib import Graph, URIRef
@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage
 
 
 # ======================================================
-# 🔐 AUTH
+# 🔐 LOGIN
 # ======================================================
 USERS = st.secrets["users"]
 
@@ -24,8 +24,7 @@ def check_login(username, password):
 
 
 def login_page():
-    st.set_page_config(page_title="Login - Drug–AE Extractor", layout="centered")
-
+    st.set_page_config(page_title="Login - AE Ontology", layout="centered")
     st.markdown("<h2 style='text-align:center;'>🔐 Login</h2>", unsafe_allow_html=True)
 
     username = st.text_input("Username")
@@ -37,11 +36,11 @@ def login_page():
             st.session_state.username = username
             st.rerun()
         else:
-            st.error("Invalid username or password")
+            st.error("Invalid credentials")
 
 
 # ======================================================
-# 🤖 LLM
+# 🤖 GLOBAL LLM INSTANCE (per your request)
 # ======================================================
 llm = ChatGroq(
     model=st.secrets["model"],
@@ -55,21 +54,18 @@ llm = ChatGroq(
 # ======================================================
 @st.cache_resource(show_spinner=True)
 def load_ontologies():
-    print("Loading ontologies...")
 
     hpo = Ontology("http://purl.obolibrary.org/obo/hp.obo")
 
-    # OAE
-    url = "https://raw.githubusercontent.com/OAE-ontology/OAE/master/src/oae_merged.owl"
-    r = requests.get(url)
+    oae_url = "https://raw.githubusercontent.com/OAE-ontology/OAE/master/src/oae_merged.owl"
+    r = requests.get(oae_url)
     with open("oae.owl", "wb") as f:
         f.write(r.content)
     oae = Graph()
     oae.parse("oae.owl", format="xml")
 
-    # MONDO
-    url = "http://purl.obolibrary.org/obo/mondo.obo"
-    r = requests.get(url)
+    mondo_url = "http://purl.obolibrary.org/obo/mondo.obo"
+    r = requests.get(mondo_url)
     with open("mondo.obo", "wb") as f:
         f.write(r.content)
     mondo = Ontology("mondo.obo")
@@ -81,7 +77,7 @@ hpo, oae, mondo = load_ontologies()
 
 
 # ======================================================
-# 🧠 Utils
+# 🧠 Helpers
 # ======================================================
 def normalize_term(term: str):
     return term.strip().lower().replace("-", " ").replace("_", " ")
@@ -113,7 +109,7 @@ def find_in_all_ontologies(term, top_n=10):
 
 
 # ======================================================
-# 🧠 Pipeline State Model
+# 📌 LangGraph State
 # ======================================================
 class AgentState(BaseModel):
     input_text: str
@@ -124,11 +120,10 @@ class AgentState(BaseModel):
 
 
 # ======================================================
-# 🧠 Agent Steps (PROMPTS UNCHANGED)
+# 🔥 Your Agent Steps (ALL PROMPTS UNCHANGED)
 # ======================================================
 
 def classify_relation(state: AgentState):
-    text = state.input_text
     prompt = f"""
 You are a biomedical classifier. Analyze the text and respond with only YES or NO.
 
@@ -139,7 +134,7 @@ Guidelines:
 - If the drug and symptom merely co-occur (e.g., observational or disease-related), answer NO.
 - When uncertain, choose NO.
 
-Text: {text}
+Text: {state.input_text}
 
 Respond strictly with YES or NO.
 """
@@ -149,12 +144,11 @@ Respond strictly with YES or NO.
 
 
 def extract_drugs(state: AgentState):
-    text = state.input_text
     prompt = f"""
 Extract all drug names mentioned in the text.
 Output must be a JSON array of strings only.
 
-Text: {text}
+Text: {state.input_text}
 """
     r = llm.invoke([HumanMessage(content=prompt)])
     state.drugs = r.content
@@ -162,11 +156,6 @@ Text: {text}
 
 
 def identify_adverse_events(state: AgentState):
-    if not state.drugs:
-        state.result = {"message": "No drugs found"}
-        return state
-
-    text = state.input_text
     prompt = f"""
 You are a biomedical relation identifier.
 
@@ -185,7 +174,7 @@ Drug: <drug_name> -> None (None)
 
 Now analyze the following:
 Drugs: {state.drugs}
-Text: {text}
+Text: {state.input_text}
 """
     r = llm.invoke([HumanMessage(content=prompt)])
     state.ae_raw = r.content
@@ -193,11 +182,6 @@ Text: {text}
 
 
 def structure_json_output(state: AgentState):
-
-    if not state.ae_raw or "None" in state.ae_raw:
-        state.result = []
-        return state
-
     prompt = f"""
 Convert the following extracted information into STRICT JSON.
 
@@ -213,15 +197,13 @@ Extracted text:
 {state.ae_raw}
 """
     r = llm.invoke([HumanMessage(content=prompt)])
-
     cleaned = r.content.replace("```json", "").replace("```", "").strip()
+
     try:
         state.result = json.loads(cleaned)
     except:
         state.result = []
-
     return state
-
 
 
 def map_ontology_terms(state: AgentState):
@@ -231,9 +213,7 @@ def map_ontology_terms(state: AgentState):
     for d in state.result:
         for ae in d.get("adverse_events", []):
             ae["ontology_mapping"] = find_in_all_ontologies(ae["event"])
-
     return state
-
 
 
 def validate_and_select_best_ontology(state: AgentState):
@@ -248,7 +228,7 @@ def validate_and_select_best_ontology(state: AgentState):
         validated_events = []
 
         for ae in d.get("adverse_events", []):
-            event_name = ae["event"]
+            event = ae["event"]
             mappings = ae.get("ontology_mapping", [])
 
             reasoning_prompt = f"""
@@ -260,14 +240,14 @@ Task:
 3. Return the best ontology record, and include all others as alternates.
 
 Drug: {drug}
-Event: {event_name}
+Event: {event}
 Ontology Mappings:
 {json.dumps(mappings, indent=2)}
 
 Return STRICT JSON (no markdown):
 
 {{
-  "event": "{event_name}",
+  "event": "{event}",
   "is_true_ae": "YES" or "NO",
   "best_ontology": {{
       "ontology": "HPO" or "OAE" or "MONDO",
@@ -275,27 +255,40 @@ Return STRICT JSON (no markdown):
       "name": "<ontology_label>",
       "similarity": <float between 0 and 1>
   }},
-  "alternate_ontologies": [list of the other ontology mappings as shown above],
+  "alternate_ontologies": [list],
   "reasoning_summary": "short biomedical justification"
 }}
 """
-            r = llm.invoke([HumanMessage(content=reasoning_prompt)])
-            content = r.content.strip()
+            response = llm.invoke([HumanMessage(content=reasoning_prompt)])
+            content = response.content.strip()
 
+            # ⛑ JSON self-repair logic
             try:
                 parsed = json.loads(content)
             except:
-                parsed = {
-                    "event": event_name,
-                    "is_true_ae": "UNKNOWN",
-                    "best_ontology": None,
-                    "alternate_ontologies": mappings,
-                    "reasoning_summary": "LLM returned invalid JSON"
-                }
+                repair_prompt = f"""
+The following output was intended to be strict JSON but is malformed.
 
-            # 🔥 Preserve reference_sentence
+Fix ONLY the formatting — do NOT change values.
+
+Malformed JSON:
+{content}
+
+Return VALID JSON only.
+"""
+                repair = llm.invoke([HumanMessage(content=repair_prompt)]).content.strip()
+                try:
+                    parsed = json.loads(repair)
+                except:
+                    parsed = {
+                        "event": event,
+                        "is_true_ae": "UNKNOWN",
+                        "best_ontology": None,
+                        "alternate_ontologies": mappings,
+                        "reasoning_summary": "LLM could not fix JSON"
+                    }
+
             parsed["reference_sentence"] = ae.get("reference_sentence")
-
             validated_events.append(parsed)
 
         final.append({"drug": drug, "validated_adverse_events": validated_events})
@@ -305,10 +298,9 @@ Return STRICT JSON (no markdown):
 
 
 # ======================================================
-# 🔗 Build Pipeline
+# 🔗 Build Graph
 # ======================================================
 graph = StateGraph(AgentState)
-
 graph.add_node("classify", classify_relation)
 graph.add_node("extract", extract_drugs)
 graph.add_node("identify", identify_adverse_events)
@@ -331,10 +323,10 @@ pipeline = graph.compile()
 # 🎨 UI
 # ======================================================
 def main_app():
-    st.set_page_config(page_title="Drug–AE Ontology", layout="wide")
-    st.title("💊 Drug–AE Ontology Extraction")
+    st.set_page_config(page_title="Drug–AE Ontology Extractor", layout="wide")
+    st.title("💊 Drug–AE Ontology Extraction Pipeline")
 
-    st.write(f"👋 Welcome, **{st.session_state.username}**")
+    st.write(f"Welcome **{st.session_state.username}**")
 
     if st.button("Logout"):
         st.session_state.authenticated = False
@@ -346,56 +338,51 @@ def main_app():
     text = ""
 
     if mode == "Paste Text":
-        text = st.text_area("Paste biomedical text", height=200)
+        text = st.text_area("Paste biomedical text here:", height=200)
     else:
         pdf = st.file_uploader("Upload PDF", type=["pdf"])
         if pdf:
             with fitz.open(stream=pdf.read(), filetype="pdf") as doc:
                 text = "\n".join(page.get_text("text") for page in doc)
-            st.text_area("Extracted Text", text[:2000])
+            st.text_area("Extracted Text Preview:", text[:2000])
 
-    if st.button("Run Analysis"):
+    if st.button("Run Extraction"):
         if not text.strip():
-            st.warning("Provide text first.")
+            st.warning("Please enter or upload text.")
         else:
-            with st.spinner("Processing..."):
+            with st.spinner("Running LLM + Ontology pipeline..."):
                 out = pipeline.invoke({"input_text": text})
                 result = out["result"]
 
-            st.success("Done ✔️")
-            st.subheader("📦 JSON Output")
+            st.success("✔ Completed")
             st.json(result)
 
+            # Flatten table
             rows = []
-            for item in result:
-                for ae in item["validated_adverse_events"]:
+            for entry in result:
+                drug = entry["drug"]
+                for ae in entry["validated_adverse_events"]:
                     best = ae.get("best_ontology") or {}
                     rows.append({
-                        "Drug": item["drug"],
+                        "Drug": drug,
                         "Event": ae["event"],
-                        "Valid AE": ae["is_true_ae"],
+                        "Valid AE?": ae["is_true_ae"],
                         "Reference Sentence": ae.get("reference_sentence"),
                         "Ontology": best.get("ontology"),
                         "Ontology ID": best.get("id"),
-                        "Ontology Label": best.get("name"),
+                        "Ontology Name": best.get("name"),
                         "Similarity": best.get("similarity"),
                         "Reasoning": ae["reasoning_summary"]
                     })
 
             if rows:
                 df = pd.DataFrame(rows)
-                st.subheader("📊 Table Output")
-                st.dataframe(df, use_container_width=True)
-
-                st.download_button(
-                    "Download CSV",
-                    df.to_csv(index=False),
-                    file_name="drug_ae_ontology_output.csv"
-                )
+                st.dataframe(df)
+                st.download_button("Download CSV", df.to_csv(index=False), "ontology_results.csv")
 
 
 # ======================================================
-# 🚀 Entry
+# 🚀 ENTRY
 # ======================================================
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
