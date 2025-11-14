@@ -118,8 +118,8 @@ class AgentState(BaseModel):
 # =========================================
 # 🔹 Secure LLM Setup (Key from secrets)
 # =========================================
-api = st.secrets["auth"]["API_KEY"]
-model_name = st.secrets["auth"]["MODEL"]
+api = st.secrets["api"]
+model_name = st.secrets["model"]
 
 llm = ChatGroq(model=model_name, temperature=0, api_key=api)
 
