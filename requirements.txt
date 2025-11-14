@@ -1,7 +1,17 @@
 streamlit
 pandas
-PyMuPDF
+pymupdf
+requests
+pronto
+rdflib
+curies
+python-dotenv
+
+# LangChain + LangGraph + Groq
 langchain
 langchain-core
 langchain-groq
 langgraph
+
+# Optional but recommended for stability
+tqdm
