@@ -1,7 +1,7 @@
 import streamlit as st
 import json
 import pandas as pd
-import fitz  # PDF reader
+import fitz  # PyMuPDF
 import requests
 from pronto import Ontology
 from rdflib import Graph, URIRef
@@ -40,7 +40,7 @@ def login_page():
 
 
 # ======================================================
-# 🤖 GLOBAL LLM INSTANCE (per your request)
+# 🤖 GLOBAL LLM INSTANCE
 # ======================================================
 llm = ChatGroq(
     model=st.secrets["model"],
@@ -54,7 +54,6 @@ llm = ChatGroq(
 # ======================================================
 @st.cache_resource(show_spinner=True)
 def load_ontologies():
-
     hpo = Ontology("http://purl.obolibrary.org/obo/hp.obo")
 
     oae_url = "https://raw.githubusercontent.com/OAE-ontology/OAE/master/src/oae_merged.owl"
@@ -91,21 +90,38 @@ def find_in_all_ontologies(term, top_n=10):
         if t.name:
             score = SequenceMatcher(None, term_norm, normalize_term(t.name)).ratio()
             if score > 0.65:
-                matches.append({"ontology": "HPO", "id": t.id, "name": t.name, "similarity": round(score, 3)})
+                matches.append({
+                    "ontology": "HPO",
+                    "id": t.id,
+                    "name": t.name,
+                    "similarity": round(score, 3)
+                })
 
     for s, p, o_term in oae.triples((None, URIRef("http://www.w3.org/2000/01/rdf-schema#label"), None)):
         score = SequenceMatcher(None, term_norm, normalize_term(str(o_term))).ratio()
         if score > 0.65:
-            matches.append({"ontology": "OAE", "id": str(s), "name": str(o_term), "similarity": round(score, 3)})
+            matches.append({
+                "ontology": "OAE",
+                "id": str(s),
+                "name": str(o_term),
+                "similarity": round(score, 3)
+            })
 
     for t in mondo.terms():
         if t.name:
             score = SequenceMatcher(None, term_norm, normalize_term(t.name)).ratio()
             if score > 0.65:
-                matches.append({"ontology": "MONDO", "id": t.id, "name": t.name, "similarity": round(score, 3)})
+                matches.append({
+                    "ontology": "MONDO",
+                    "id": t.id,
+                    "name": t.name,
+                    "similarity": round(score, 3)
+                })
 
     matches.sort(key=lambda x: -x["similarity"])
-    return matches[:top_n] if matches else [{"ontology": None, "id": None, "name": "Not found", "similarity": 0}]
+    return matches[:top_n] if matches else [
+        {"ontology": None, "id": None, "name": "Not found", "similarity": 0}
+    ]
 
 
 # ======================================================
@@ -120,7 +136,7 @@ class AgentState(BaseModel):
 
 
 # ======================================================
-# 🔥 Your Agent Steps (ALL PROMPTS UNCHANGED)
+# 🔥 Your Agent Steps (prompts unchanged)
 # ======================================================
 
 def classify_relation(state: AgentState):
@@ -182,6 +198,10 @@ Text: {state.input_text}
 
 
 def structure_json_output(state: AgentState):
+    if not state.ae_raw:
+        state.result = []
+        return state
+
     prompt = f"""
 Convert the following extracted information into STRICT JSON.
 
@@ -200,9 +220,14 @@ Extracted text:
     cleaned = r.content.replace("```json", "").replace("```", "").strip()
 
     try:
-        state.result = json.loads(cleaned)
-    except:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            state.result = parsed
+        else:
+            state.result = []
+    except Exception:
         state.result = []
+
     return state
 
 
@@ -211,25 +236,69 @@ def map_ontology_terms(state: AgentState):
         return state
 
     for d in state.result:
+        if not isinstance(d, dict):
+            continue
         for ae in d.get("adverse_events", []):
-            ae["ontology_mapping"] = find_in_all_ontologies(ae["event"])
+            if not isinstance(ae, dict):
+                continue
+            term = ae.get("event")
+            if term:
+                ae["ontology_mapping"] = find_in_all_ontologies(term)
+            else:
+                ae["ontology_mapping"] = []
     return state
 
 
 def validate_and_select_best_ontology(state: AgentState):
+    """
+    More defensive validation stage:
+    - Handles bad JSON
+    - Handles unexpected shapes
+    - Preserves reference_sentence
+    """
 
     if not isinstance(state.result, list):
-        return state
+        # if it's still a string, last-ditch parse attempt
+        if isinstance(state.result, str):
+            try:
+                possible = json.loads(state.result)
+                if isinstance(possible, list):
+                    state.result = possible
+                else:
+                    return state
+            except Exception:
+                return state
+        else:
+            return state
 
     final = []
 
     for d in state.result:
+        # Ensure each element is a dict
+        if isinstance(d, str):
+            try:
+                d = json.loads(d)
+            except Exception:
+                continue
+        if not isinstance(d, dict):
+            continue
+
         drug = d.get("drug")
+        ae_list = d.get("adverse_events", [])
+        if not isinstance(ae_list, list):
+            continue
+
         validated_events = []
 
-        for ae in d.get("adverse_events", []):
-            event = ae["event"]
+        for ae in ae_list:
+            if not isinstance(ae, dict):
+                continue
+
+            event = ae.get("event")
+            if not event:
+                continue
             mappings = ae.get("ontology_mapping", [])
+            reference_sentence = ae.get("reference_sentence")
 
             reasoning_prompt = f"""
 You are a biomedical ontology expert agent.
@@ -259,39 +328,65 @@ Return STRICT JSON (no markdown):
   "reasoning_summary": "short biomedical justification"
 }}
 """
-            response = llm.invoke([HumanMessage(content=reasoning_prompt)])
-            content = response.content.strip()
-
-            # ⛑ JSON self-repair logic
             try:
-                parsed = json.loads(content)
-            except:
-                repair_prompt = f"""
+                resp = llm.invoke([HumanMessage(content=reasoning_prompt)])
+                content = resp.content.strip()
+
+                # First attempt: direct JSON parse
+                try:
+                    parsed = json.loads(content)
+                except Exception:
+                    # Second attempt: ask LLM to repair formatting only
+                    repair_prompt = f"""
 The following output was intended to be strict JSON but is malformed.
 
-Fix ONLY the formatting — do NOT change values.
+Fix ONLY the formatting. Do NOT change any values or field names.
 
 Malformed JSON:
 {content}
 
 Return VALID JSON only.
 """
-                repair = llm.invoke([HumanMessage(content=repair_prompt)]).content.strip()
-                try:
-                    parsed = json.loads(repair)
-                except:
+                    repair_resp = llm.invoke([HumanMessage(content=repair_prompt)])
+                    repaired = repair_resp.content.strip()
+                    try:
+                        parsed = json.loads(repaired)
+                    except Exception:
+                        parsed = {
+                            "event": event,
+                            "is_true_ae": "UNKNOWN",
+                            "best_ontology": None,
+                            "alternate_ontologies": mappings,
+                            "reasoning_summary": "LLM could not produce valid JSON"
+                        }
+
+                # Ensure parsed is a dict
+                if not isinstance(parsed, dict):
                     parsed = {
                         "event": event,
                         "is_true_ae": "UNKNOWN",
                         "best_ontology": None,
                         "alternate_ontologies": mappings,
-                        "reasoning_summary": "LLM could not fix JSON"
+                        "reasoning_summary": "LLM did not return an object"
                     }
 
-            parsed["reference_sentence"] = ae.get("reference_sentence")
+            except Exception:
+                parsed = {
+                    "event": event,
+                    "is_true_ae": "UNKNOWN",
+                    "best_ontology": None,
+                    "alternate_ontologies": mappings,
+                    "reasoning_summary": "Validation step failed"
+                }
+
+            # Preserve the original reference sentence
+            parsed["reference_sentence"] = reference_sentence
             validated_events.append(parsed)
 
-        final.append({"drug": drug, "validated_adverse_events": validated_events})
+        final.append({
+            "drug": drug,
+            "validated_adverse_events": validated_events
+        })
 
     state.result = final
     return state
@@ -355,30 +450,43 @@ def main_app():
                 result = out["result"]
 
             st.success("✔ Completed")
+            st.subheader("📦 Final JSON Output")
             st.json(result)
 
-            # Flatten table
+            # Flatten table if result looks like list of dicts
             rows = []
-            for entry in result:
-                drug = entry["drug"]
-                for ae in entry["validated_adverse_events"]:
-                    best = ae.get("best_ontology") or {}
-                    rows.append({
-                        "Drug": drug,
-                        "Event": ae["event"],
-                        "Valid AE?": ae["is_true_ae"],
-                        "Reference Sentence": ae.get("reference_sentence"),
-                        "Ontology": best.get("ontology"),
-                        "Ontology ID": best.get("id"),
-                        "Ontology Name": best.get("name"),
-                        "Similarity": best.get("similarity"),
-                        "Reasoning": ae["reasoning_summary"]
-                    })
+            if isinstance(result, list):
+                for entry in result:
+                    if not isinstance(entry, dict):
+                        continue
+                    drug = entry.get("drug")
+                    for ae in entry.get("validated_adverse_events", []):
+                        if not isinstance(ae, dict):
+                            continue
+                        best = ae.get("best_ontology") or {}
+                        rows.append({
+                            "Drug": drug,
+                            "Event": ae.get("event"),
+                            "Valid AE?": ae.get("is_true_ae"),
+                            "Reference Sentence": ae.get("reference_sentence"),
+                            "Ontology": best.get("ontology"),
+                            "Ontology ID": best.get("id"),
+                            "Ontology Name": best.get("name"),
+                            "Similarity": best.get("similarity"),
+                            "Reasoning": ae.get("reasoning_summary"),
+                        })
 
             if rows:
                 df = pd.DataFrame(rows)
-                st.dataframe(df)
-                st.download_button("Download CSV", df.to_csv(index=False), "ontology_results.csv")
+                st.subheader("📊 Structured Table")
+                st.dataframe(df, use_container_width=True)
+                st.download_button(
+                    "Download CSV",
+                    df.to_csv(index=False),
+                    "drug_ae_ontology_output.csv"
+                )
+            else:
+                st.info("No structured validated AE events to display.")
 
 
 # ======================================================
