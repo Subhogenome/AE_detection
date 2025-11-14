@@ -274,8 +274,17 @@ Extracted text:
 {raw}
 """
     response = llm.invoke([HumanMessage(content=prompt)])
-    state.result = response.content
+
+    # 🔥 NEW: normalize JSON immediately here
+    try:
+        cleaned = response.content.replace("```json", "").replace("```", "").strip()
+        state.result = json.loads(cleaned)
+    except Exception:
+        # fallback: store raw so later logic handles it
+        state.result = response.content  
+
     return state
+
 
 
 # ======================================================
