@@ -119,7 +119,7 @@ class AgentState(BaseModel):
 # 🔹 LLM Setup
 # =========================================
 # 👇 Replace with your real key or use st.secrets if you want
-api = "YOUR_GROQ_API_KEY"
+api = st.secrets["api"]
 llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", temperature=0, api_key=api)
 
 
