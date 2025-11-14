@@ -255,43 +255,116 @@ def map_ontology_terms(state: AgentState):
 # 🔹 Step 6 — Validation (Fix: preserve reference_sentence)
 # =========================================
 def validate_and_select_best_ontology(state: AgentState):
-    data = state.result
-    final = []
+    """
+    LLM-based validation + ontology prioritization:
+    1. Determines if each AE is a true biomedical AE.
+    2. Selects best ontology entry contextually.
+    3. Returns other ontologies as alternates.
+    """
+    try:
+        data = state.result
 
-    for d in data:
-        drug_name = d.get("drug")
-        validated_events = []
+        # --- Robust JSON normalization ---
+        if isinstance(data, str):
+            try:
+                data = json.loads(data.replace("```json", "").replace("```", "").strip())
+            except Exception as err:
+                raise ValueError(f"Invalid JSON input: {err}")
 
-        for ae in d.get("adverse_events", []):
-            event = ae.get("event")
-            reference_sentence = ae.get("reference_sentence")  # <-- captured
+        if not isinstance(data, list):
+            raise TypeError("Expected list of dicts after ontology mapping.")
 
-            ontology_mappings = ae.get("ontology_mapping", [])
-            reasoning_prompt = f"""
-Validate adverse event relevance based on ontology matches.
+        output = []
+
+        for d in data:
+            if isinstance(d, str):
+                d = json.loads(d)
+            drug_name = d.get("drug")
+            validated_events = []
+
+            for ae in d.get("adverse_events", []):
+                event_name = ae.get("event")
+                ontology_mappings = ae.get("ontology_mapping", [])
+
+                # --- Prepare prompt ---
+                reasoning_prompt = f"""
+You are a biomedical ontology expert agent.
+
+Task:
+1. Determine if the given event is a TRUE adverse event ie mentioned in the ontolgies
+2. Identify which ontology (HPO, OAE, or MONDO) provides the most contextually relevant definition.
+3. Return the best ontology record, and include all others as alternates.
+
+Drug: {drug_name}
+Event: {event_name}
+Ontology Mappings:
+{json.dumps(ontology_mappings, indent=2)}
+
+Return STRICT JSON (no markdown):
+
+{{
+  "event": "{event_name}",
+  "is_true_ae": "YES" or "NO",
+  "best_ontology": {{
+      "ontology": "HPO" or "OAE" or "MONDO",
+      "id": "<ontology_id>",
+      "name": "<ontology_label>",
+      "similarity": <float between 0 and 1>
+  }},
+  "alternate_ontologies": [list of the other ontology mappings as shown above],
+  "reasoning_summary": "short biomedical justification"
+}}
 """
 
-            try:
-                resp = llm.invoke([HumanMessage(content=reasoning_prompt)])
-                content = resp.content.strip()
-                parsed = json.loads(content)
-            except:
-                parsed = {
-                    "event": event,
-                    "is_true_ae": "UNKNOWN",
-                    "best_ontology": None,
-                    "alternate_ontologies": ontology_mappings,
-                }
+                # --- Run LLM ---
+                response = llm.invoke([HumanMessage(content=reasoning_prompt)])
+                content = response.content.strip()
 
-            # ✅ Preserve reference sentence
-            parsed["reference_sentence"] = reference_sentence
+                # --- Extract JSON safely ---
+                if "{" not in content:
+                    reasoning_json = {
+                        "event": event_name,
+                        "is_true_ae": "UNKNOWN",
+                        "best_ontology": None,
+                        "alternate_ontologies": ontology_mappings,
+                        "reasoning_summary": "LLM did not return JSON."
+                    }
+                else:
+                    start = content.find("{")
+                    end = content.rfind("}") + 1
+                    json_block = content[start:end]
+                    try:
+                        reasoning_json = json.loads(json_block)
+                    except Exception:
+                        reasoning_json = {
+                            "event": event_name,
+                            "is_true_ae": "UNKNOWN",
+                            "best_ontology": None,
+                            "alternate_ontologies": ontology_mappings,
+                            "reasoning_summary": "Malformed JSON from model."
+                        }
 
-            validated_events.append(parsed)
+                # --- Fallback: ensure alternate ontologies are preserved ---
+                if "alternate_ontologies" not in reasoning_json or not reasoning_json["alternate_ontologies"]:
+                    reasoning_json["alternate_ontologies"] = ontology_mappings
 
-        final.append({"drug": drug_name, "validated_adverse_events": validated_events})
+                # ✅ REQUIRED FIX: preserve the reference sentence
+                reasoning_json["reference_sentence"] = ae.get("reference_sentence")
 
-    state.result = final
-    return state
+                validated_events.append(reasoning_json)
+
+            output.append({
+                "drug": drug_name,
+                "validated_adverse_events": validated_events
+            })
+
+        state.result = output
+        return state
+
+    except Exception as e:
+        state.result = {"error": f"Validation agent failed: {e}"}
+        return state
+
 
 
 # =========================================
