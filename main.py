@@ -393,16 +393,20 @@ if run_btn:
     # Convert to dataframe:
     rows = []
     for item in output["result"]:
-        for evt in item["validated_adverse_events"]:
-            rows.append({
-                "Drug": item["drug"],
-                "Adverse Event": evt["event"],
-                "Ontology": evt.get("best_ontology", {}).get("ontology"),
-                "Ontology ID": evt.get("best_ontology", {}).get("id"),
-                "Ontology Term": evt.get("best_ontology", {}).get("name"),
-                "Is True AE": evt["is_true_ae"],
-                "Source Sentence": evt.get("reference sentence")
-            })
+     for evt in item["validated_adverse_events"]:
+        
+        best = evt.get("best_ontology") or {}  # prevents NoneType access
+
+        rows.append({
+            "Drug": item.get("drug"),
+            "Adverse Event": evt.get("event"),
+            "Ontology": best.get("ontology", "N/A"),
+            "Ontology ID": best.get("id", "N/A"),
+            "Ontology Term": best.get("name", "N/A"),
+            "Is True AE": evt.get("is_true_ae"),
+            "Source Sentence": evt.get("reference sentence")
+        })
+
 
     df = pd.DataFrame(rows)
 
