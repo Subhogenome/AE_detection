@@ -386,8 +386,7 @@ if run_btn:
     with st.spinner("Extracting Adverse Events... ⏳"):
         output = pipeline.invoke({"input_text": final_text})
 
-    st.subheader("🔍 Raw Model Output JSON")
-    st.json(output["result"])
+
 
 
     # Convert to dataframe:
