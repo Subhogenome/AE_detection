@@ -13,7 +13,7 @@ from pronto import Ontology
 from rdflib import Graph, URIRef
 from difflib import SequenceMatcher
 import requests
-
+import whisper
 
 
 # =========================================
@@ -357,13 +357,25 @@ pipeline = graph.compile()
 # =========================================
 # 🔹 STREAMLIT UI
 # =========================================
+
+
+
+# -------------------------
+# OPTIONAL: Install if needed
+# pip install openai-whisper torch
+# -------------------------
+
 st.title("📌 Automated Pharmacovigilance Adverse Event Extractor")
 
 uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
+uploaded_audio = st.file_uploader("Upload an audio/video file", type=["mp3", "wav", "m4a", "mp4"])
 text_input = st.text_area("Or paste text here")
 
 run_btn = st.button("Run Extraction")
 
+# -------------------------
+# PDF Text Extraction
+# -------------------------
 def extract_text_from_pdf(pdf_file):
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     text = ""
@@ -371,41 +383,66 @@ def extract_text_from_pdf(pdf_file):
         text += page.get_text()
     return text
 
+# -------------------------
+# Audio Transcription using Whisper
+# -------------------------
+def transcribe_audio(file):
+    st.info("🎙 Transcribing audio using Whisper...")
+    model = whisper.load_model("base")
+    
+    with open("temp_audio","wb") as f:
+        f.write(file.read())
 
+    result = model.transcribe("temp_audio")
+    return result["text"]
+
+
+# -------------------------
+# MAIN EXECUTION
+# -------------------------
 if run_btn:
+
+    final_text = None
 
     if uploaded_pdf:
         final_text = extract_text_from_pdf(uploaded_pdf)
         st.success("📄 PDF successfully processed.")
+
+    elif uploaded_audio:
+        with st.spinner("⏳ Converting speech to text..."):
+            final_text = transcribe_audio(uploaded_audio)
+        st.success("🎤 Audio successfully transcribed.")
+        st.subheader("📝 Transcription Preview")
+        st.write(final_text)
+
     elif text_input.strip():
         final_text = text_input
+
     else:
-        st.error("❗ Please provide a PDF or text.")
+        st.error("❗ Please provide a PDF, audio file, or text.")
         st.stop()
 
-    with st.spinner("Extracting Adverse Events... ⏳"):
+    with st.spinner("🔎 Extracting Adverse Events..."):
         output = pipeline.invoke({"input_text": final_text})
 
-
-
-
-    # Convert to dataframe:
+    # -----------------------------
+    # Convert output to table format
+    # -----------------------------
     rows = []
     for item in output["result"]:
-     for evt in item["validated_adverse_events"]:
-        
-        best = evt.get("best_ontology") or {}  # prevents NoneType access
+        for evt in item["validated_adverse_events"]:
 
-        rows.append({
-            "Drug": item.get("drug"),
-            "Adverse Event": evt.get("event"),
-            "Ontology": best.get("ontology", "N/A"),
-            "Ontology ID": best.get("id", "N/A"),
-            "Ontology Term": best.get("name", "N/A"),
-            "Is True AE": evt.get("is_true_ae"),
-            "Source Sentence": evt.get("reference sentence")
-        })
+            best = evt.get("best_ontology") or {}
 
+            rows.append({
+                "Drug": item.get("drug"),
+                "Adverse Event": evt.get("event"),
+                "Ontology": best.get("ontology", "N/A"),
+                "Ontology ID": best.get("id", "N/A"),
+                "Ontology Term": best.get("name", "N/A"),
+                "Is True AE": evt.get("is_true_ae"),
+                "Source Sentence": evt.get("reference sentence")
+            })
 
     df = pd.DataFrame(rows)
 
