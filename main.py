@@ -17,7 +17,7 @@ import requests
 
 
 # =========================================
-# 🔹 Load Ontologies
+# 🔹 Load Ontologies (HPO, OAE, MONDO)
 # =========================================
 @st.cache_resource
 def load_ontologies():
@@ -82,7 +82,7 @@ def find_in_all_ontologies(term, top_n=5):
 
 
 # =========================================
-# 🔹 State Schema
+# 🔹 Define Pipeline State Schema
 # =========================================
 class AgentState(BaseModel):
     input_text: str
@@ -101,32 +101,41 @@ llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", temperature=0,
 
 
 
-# =========================================
-# 🔹 Step 1 — Relation Check
-# =========================================
+# ---- Pipeline Steps (Use your existing functions unchanged) ----
+#   (I am omitting for brevity — you already have them)
+
+# Just paste your classify_relation, extract_drugs, identify_adverse_events,
+# structure_json_output, map_ontology_terms, validate_and_select_best_ontology functions BELOW:
+
+# ---- paste your functions here (unchanged) ----
 def classify_relation(state: AgentState):
     text = state.input_text
     prompt = f"""
-You are a biomedical classifier. Respond ONLY YES or NO.
+You are a biomedical classifier. Analyze the text and respond with only YES or NO.
 
-Determine if the text describes a causal relationship between a drug and an adverse event.
+Determine if the text explicitly or implicitly describes a *causal relationship* between a drug and an adverse event.
+
+Guidelines:
+- Answer YES only if the text clearly states or implies that the drug *caused, led to, resulted in, induced, or was associated with* an adverse event.
+- If the drug and symptom merely co-occur (e.g., observational or disease-related), answer NO.
+- When uncertain, choose NO.
 
 Text: {text}
+
+Respond strictly with YES or NO.
 """
     response = llm.invoke([HumanMessage(content=prompt)])
     state.relation_flag = "YES" in response.content.upper()
     return state
 
-
-
 # =========================================
-# 🔹 Step 2 — Extract Drugs
+# 🔹 Step 2 — Drug Extraction
 # =========================================
 def extract_drugs(state: AgentState):
     text = state.input_text
     prompt = f"""
 Extract all drug names mentioned in the text.
-Output ONLY a JSON array of strings.
+Output must be a JSON array of strings only.
 
 Text: {text}
 """
@@ -135,23 +144,19 @@ Text: {text}
     return state
 
 
-
 # =========================================
-# 🔹 Step 3 — AE Extraction (⚠ Ensures reference_sentence always exists)
+# 🔹 Step 3 — Adverse Event Identification
 # =========================================
 def identify_adverse_events(state: AgentState):
     text = state.input_text
 
     causality_prompt = f"""
 You are an adverse event extraction agent.
+For each drug listed below, extract only the adverse events mentioned in the text.
+Include the exact sentence where the AE is mentioned.
+If a drug has no adverse events mentioned, use "Nan" for both the event and reference_sentence.
 
-Rules:
-- Extract ONLY adverse events for each drug.
-- You MUST include "reference_sentence" (not "reference sentence").
-- If no AE exists for a drug, return "Nan" for event and reference_sentence.
-
-Output MUST be strictly:
-
+Output must be STRICT JSON using:
 [
   {{
     "drug": "DrugName",
@@ -164,9 +169,13 @@ Output MUST be strictly:
   }}
 ]
 
-Drugs: {state.drugs}
+Do not include any extra text, explanation, or comments outside the JSON.
+
+Drugs:  {state.drugs}
 Text: {text}
 """
+
+
 
     response = llm.invoke([HumanMessage(content=causality_prompt)])
     state.ae_raw = response.content.strip()
@@ -174,43 +183,61 @@ Text: {text}
 
 
 
+
 # =========================================
 # 🔹 Step 4 — Structure JSON
 # =========================================
 def structure_json_output(state: AgentState):
+    if not state.ae_raw or "None" in state.ae_raw:
+        state.result = {"relation": True, "message": "No adverse events identified"}
+        return state
+
     raw = state.ae_raw
     prompt = f"""
-Convert the extracted data into STRICT JSON format.
+Convert the following extracted information into STRICT JSON.
 
-Required Structure:
-- "drug": string
-- "adverse_events": list of {{ "event": string, "reference_sentence": string }}
+Rules:
+- JSON must be a list of objects.
+- Each object must have:
+  "drug": string,
+  "adverse_events": list of objects with keys "event" and "reference_sentence".
+ 
+- If the drug has no AEs (None), return an empty list for "adverse_events".
+- Do not include any explanation or text outside JSON.
 
-Extracted:
+Extracted text:
 {raw}
 """
     response = llm.invoke([HumanMessage(content=prompt)])
     state.result = response.content
     return state
 
-
-
 # =========================================
-# 🔹 Step 5 — Map Ontologies
+# 🔹 Step 5 — Ontology Mapping
 # =========================================
 def map_ontology_terms(state: AgentState):
     try:
         data_str = state.result
         if isinstance(data_str, str):
-            data = json.loads(data_str.replace("```json","").replace("```","").strip())
+            data_str = data_str.replace("```json", "").replace("```", "").strip()
+            data = json.loads(data_str)
         else:
             data = data_str
 
-        for d in data:
-            for ae in d.get("adverse_events", []):
-                ae["ontology_mapping"] = find_in_all_ontologies(ae.get("event"))
+        filtered_data = []
 
-        state.result = data
+        for d in data:
+            # skip drugs with no AE
+            if not d.get("adverse_events") or len(d["adverse_events"]) == 0:
+                continue
+
+            for ae in d.get("adverse_events", []):
+                term = ae.get("event")
+                ae["ontology_mapping"] = find_in_all_ontologies(term, top_n=10)
+
+            filtered_data.append(d)
+
+        state.result = filtered_data
         return state
 
     except Exception as e:
@@ -220,56 +247,94 @@ def map_ontology_terms(state: AgentState):
 
 
 # =========================================
-# 🔹 Step 6 — Validate & Pick Best Ontology (Ensures ref sentence stays)
+# 🔹 Step 6 — LLM Validation + Ontology Selection
 # =========================================
 def validate_and_select_best_ontology(state: AgentState):
-    data = state.result
-    if isinstance(data, str):
-        data = json.loads(data)
 
-    validated_output = []
+    try:
+        data = state.result
 
-    for d in data:
-        drug_name = d.get("drug")
-        validated_events = []
+        if isinstance(data, str):
+            data = json.loads(data.replace("```json", "").replace("```", "").strip())
 
-        for ae in d.get("adverse_events", []):
-            ref = ae.get("reference_sentence") or ae.get("reference sentence") or "Nan"
-            ontology_mappings = ae.get("ontology_mapping", [])
+        validated_output = []
 
-            reasoning_prompt = f"""
-Return strictly formatted JSON:
+        for d in data:
+            drug_name = d.get("drug")
+            validated_events = []
+
+            for ae in d.get("adverse_events", []):
+                ontology_mappings = ae.get("ontology_mapping", [])
+
+                # skip if unmapped (similarity 0 or ontology None)
+                if ontology_mappings[0]["ontology"] is None or ontology_mappings[0]["similarity"] == 0:
+                    continue
+
+                event_name = ae.get("event")
+
+                # ---- Validation prompt unchanged ----
+                reasoning_prompt = f"""
+You are a biomedical ontology expert agent.
+
+Task:
+1. Determine if the given event is a TRUE adverse event 
+2. Identify which ontology (HPO, OAE, or MONDO) provides the most contextually relevant definition.
+3. Return the best ontology record, and include all others as alternates.
+
+Drug: {drug_name}
+Event: {event_name}
+Ontology Mappings:
+{json.dumps(ontology_mappings, indent=2)}
+
+Return STRICT JSON (no markdown):
 
 {{
-  "event": "{ae.get('event')}",
+  "event": "{event_name}",
   "is_true_ae": "YES" or "NO",
-  "reference_sentence": "{ref}",
-  "best_ontology": {json.dumps(ontology_mappings[0])},
-  "alternate_ontologies": {json.dumps(ontology_mappings[1:])},
-  "reasoning_summary": "Short justification"
+  "reference sentence": "{ae.get('reference_sentence')}",
+
+  "best_ontology": {{
+      "ontology": "HPO" or "OAE" or "MONDO",
+      "id": "<ontology_id>",
+      "name": "<ontology_label>",
+      "similarity": <float between 0 and 1>
+  }},
+  "alternate_ontologies": [list of the other ontology mappings as shown above],
+  "reasoning_summary": "short biomedical justification"
 }}
 """
+                response = llm.invoke([HumanMessage(content=reasoning_prompt)])
+                content = response.content.strip()
 
-            response = llm.invoke([HumanMessage(content=reasoning_prompt)])
-            validated_events.append(json.loads(response.content))
+                try:
+                    content_json = json.loads(content[content.find("{"):content.rfind("}")+1])
+                except:
+                    content_json = {
+                        "event": event_name,
+                        "is_true_ae": "UNKNOWN",
+                        "best_ontology": None,
+                        "alternate_ontologies": ontology_mappings,
+                        "reasoning_summary": "Model returned invalid JSON; validation skipped."
+                    }
 
-        validated_output.append({
-            "drug": drug_name,
-            "validated_adverse_events": validated_events
-        })
+                validated_events.append(content_json)
 
-    state.result = validated_output
-    return state
+            # only append drugs that still have validated AE after filtering
+            if validated_events:
+                validated_output.append({"drug": drug_name, "validated_adverse_events": validated_events})
 
+        state.result = validated_output
+        return state
 
-
+    except Exception as e:
+        state.result = {"error": f"Validation agent failed: {e}"}
+        return state
 
 
 # =========================================
-# 🔹 Build Pipeline
+# 🔹 Build LangGraph Pipeline
 # =========================================
 graph = StateGraph(AgentState)
-
 graph.add_node("classify", classify_relation)
 graph.add_node("extract_drugs", extract_drugs)
 graph.add_node("identify_aes", identify_adverse_events)
@@ -278,10 +343,10 @@ graph.add_node("map_ontology", map_ontology_terms)
 graph.add_node("validate_best", validate_and_select_best_ontology)
 
 graph.set_entry_point("classify")
-graph.add_edge("classify","extract_drugs")
-graph.add_edge("extract_drugs","identify_aes")
-graph.add_edge("identify_aes","structure_json")
-graph.add_edge("structure_json","map_ontology")
+graph.add_edge("classify", "extract_drugs")
+graph.add_edge("extract_drugs", "identify_aes")
+graph.add_edge("identify_aes", "structure_json")
+graph.add_edge("structure_json", "map_ontology")
 graph.add_edge("map_ontology","validate_best")
 graph.add_edge("validate_best", END)
 
@@ -296,6 +361,7 @@ st.title("📌 Automated Pharmacovigilance Adverse Event Extractor")
 
 uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
 text_input = st.text_area("Or paste text here")
+
 run_btn = st.button("Run Extraction")
 
 def extract_text_from_pdf(pdf_file):
@@ -310,36 +376,40 @@ if run_btn:
 
     if uploaded_pdf:
         final_text = extract_text_from_pdf(uploaded_pdf)
-        st.success("📄 PDF processed.")
+        st.success("📄 PDF successfully processed.")
     elif text_input.strip():
         final_text = text_input
     else:
-        st.error("❗ Provide PDF or text.")
+        st.error("❗ Please provide a PDF or text.")
         st.stop()
 
-    with st.spinner("Extracting AE relationships... ⏳"):
+    with st.spinner("Extracting Adverse Events... ⏳"):
         output = pipeline.invoke({"input_text": final_text})
 
-    # ---- Convert to Table ----
+
+
+
+    # Convert to dataframe:
     rows = []
-
     for item in output["result"]:
-        for evt in item["validated_adverse_events"]:
-            best = evt.get("best_ontology") or {}
+     for evt in item["validated_adverse_events"]:
+        
+        best = evt.get("best_ontology") or {}  # prevents NoneType access
 
-            rows.append({
-                "Drug": item.get("drug"),
-                "Adverse Event": evt.get("event"),
-                "Ontology": best.get("ontology", "N/A"),
-                "Ontology ID": best.get("id", "N/A"),
-                "Ontology Term": best.get("name", "N/A"),
-                "Is True AE": evt.get("is_true_ae"),
-                "Source Sentence": evt.get("reference_sentence") or "Nan"
-            })
+        rows.append({
+            "Drug": item.get("drug"),
+            "Adverse Event": evt.get("event"),
+            "Ontology": best.get("ontology", "N/A"),
+            "Ontology ID": best.get("id", "N/A"),
+            "Ontology Term": best.get("name", "N/A"),
+            "Is True AE": evt.get("is_true_ae"),
+            "Source Sentence": evt.get("reference sentence")
+        })
+
 
     df = pd.DataFrame(rows)
 
-    st.subheader("📊 Extracted Adverse Events")
+    st.subheader("📊 Extracted Adverse Events Table")
     st.dataframe(df)
 
     csv = df.to_csv(index=False).encode("utf-8")
@@ -350,3 +420,4 @@ if run_btn:
         file_name="AE_extraction_output.csv",
         mime="text/csv"
     )
+
