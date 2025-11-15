@@ -6,7 +6,8 @@ pronto
 rdflib
 curies
 python-dotenv
-whisper
+openai-whisper
+torch
 # LangChain + LangGraph + Groq
 langchain
 langchain-core
