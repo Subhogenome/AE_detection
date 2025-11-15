@@ -280,7 +280,7 @@ Task:
 1. Determine if the given event is a TRUE adverse event 
 2. Identify which ontology (HPO, OAE, or MONDO) provides the most contextually relevant definition.
 3. Return the best ontology record, and include all others as alternates.
-
+4. for each adverse event have the refrence sentence also for that 
 Drug: {drug_name}
 Event: {event_name}
 Ontology Mappings:
