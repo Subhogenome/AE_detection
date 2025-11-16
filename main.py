@@ -320,8 +320,12 @@ Return STRICT JSON (no markdown):
                 validated_events.append(content_json)
 
             # only append drugs that still have validated AE after filtering
-            if validated_events:
-                validated_output.append({"drug": drug_name, "validated_adverse_events": validated_events})
+            true_ae_events = [e for e in validated_events if e.get("is_true_ae", "").upper() == "YES"]
+            if true_ae_events:
+              validated_output.append({
+        "drug": drug_name,
+        "validated_adverse_events": true_ae_events
+    })
 
         state.result = validated_output
         return state
