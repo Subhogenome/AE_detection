@@ -280,7 +280,7 @@ Task:
 1. Determine if the given event is a TRUE adverse event 
 2. Identify which ontology (HPO, OAE, or MONDO) provides the most contextually relevant definition.
 3. Return the best ontology record, and include all others as alternates.
-4. for each adverse event have the refrence sentence also for that 
+4. for each adverse event have the excat  refrence sentence also for that 
 Drug: {drug_name}
 Event: {event_name}
 Ontology Mappings:
@@ -291,7 +291,7 @@ Return STRICT JSON (no markdown):
 {{
   "event": "{event_name}",
   "is_true_ae": "YES" or "NO",
-  "reference sentence": "{ae.get('reference_sentence')}",
+  "reference sentence": "'reference_sentence'",
 
   "best_ontology": {{
       "ontology": "HPO" or "OAE" or "MONDO",
