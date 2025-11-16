@@ -358,19 +358,28 @@ pipeline = graph.compile()
 # 🔹 STREAMLIT UI
 # =========================================
 
-
+USERS = st.secrets["users"]
 
 # -------------------------
 # OPTIONAL: Install if needed
 # pip install openai-whisper torch
 # -------------------------
-st.title("📌 Automated Pharmacovigilance Adverse Event Extractor")
+def login_page():
+    st.title("🔐 Login")
 
-uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
-text_input = st.text_area("Or paste text here")
+    username = st.text_input("👤 Username")
+    password = st.text_input("🔑 Password", type="password")
 
-run_btn = st.button("Run Extraction")
+    if st.button("Login"):
+        if username in USERS and USERS[username] == password:
+            st.session_state["logged_in"] = True
+            st.success("✅ Login successful!")
+            st.rerun()
+        else:
+            st.error("❌ Invalid username or password")
 
+
+# ======================= 🔧 PDF TEXT EXTRACTOR =======================
 def extract_text_from_pdf(pdf_file):
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     text = ""
@@ -379,53 +388,78 @@ def extract_text_from_pdf(pdf_file):
     return text
 
 
-if run_btn:
-
-    if uploaded_pdf:
-        final_text = extract_text_from_pdf(uploaded_pdf)
-        st.success("📄 PDF successfully processed.")
-    elif text_input.strip():
-        final_text = text_input
-    else:
-        st.error("❗ Please provide a PDF or text.")
-        st.stop()
-
-    with st.spinner("Extracting Adverse Events... ⏳"):
-        output = pipeline.invoke({"input_text": final_text})
+# ======================= 🧠 LLM PIPELINE CALL =======================
+# Make sure your pipeline object exists.
+# Example call:
+def run_pipeline(input_text):
+    return pipeline.invoke({"input_text": input_text})
 
 
+# ======================= 🧪 MAIN APPLICATION =======================
+def main_interface():
+    st.title("📌 Automated Pharmacovigilance Adverse Event Extractor")
+
+    uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
+    text_input = st.text_area("Or paste text here")
+
+    run_btn = st.button("Run Extraction")
+
+    if run_btn:
+
+        if uploaded_pdf:
+            final_text = extract_text_from_pdf(uploaded_pdf)
+            st.success("📄 PDF successfully processed.")
+        elif text_input.strip():
+            final_text = text_input
+        else:
+            st.error("❗ Please provide a PDF or text.")
+            st.stop()
+
+        with st.spinner("⏳ Extracting Adverse Events..."):
+            output = run_pipeline(final_text)
+
+        # Convert to dataframe:
+        rows = []
+        for item in output["result"]:
+            for evt in item["validated_adverse_events"]:
+                
+                best = evt.get("best_ontology") or {}
+
+                rows.append({
+                    "Drug": item.get("drug"),
+                    "Adverse Event": evt.get("event"),
+                    "Ontology": best.get("ontology", "N/A"),
+                    "Ontology ID": best.get("id", "N/A"),
+                    "Ontology Term": best.get("name", "N/A"),
+                    "Is True AE": evt.get("is_true_ae"),
+                    "Source Sentence": evt.get("reference sentence")
+                })
+
+        df = pd.DataFrame(rows)
+
+        st.subheader("📊 Extracted Adverse Events Table")
+        st.dataframe(df)
+
+        csv = df.to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            label="⬇ Download CSV",
+            data=csv,
+            file_name="AE_extraction_output.csv",
+            mime="text/csv"
+        )
+
+    # Logout button
+    if st.button("Logout"):
+        st.session_state["logged_in"] = False
+        st.rerun()
 
 
-    # Convert to dataframe:
-    rows = []
-    for item in output["result"]:
-     for evt in item["validated_adverse_events"]:
-        
-        best = evt.get("best_ontology") or {}  # prevents NoneType access
+# ======================= 🚀 STREAMLIT APP LOGIC =======================
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
 
-        rows.append({
-            "Drug": item.get("drug"),
-            "Adverse Event": evt.get("event"),
-            "Ontology": best.get("ontology", "N/A"),
-            "Ontology ID": best.get("id", "N/A"),
-            "Ontology Term": best.get("name", "N/A"),
-            "Is True AE": evt.get("is_true_ae"),
-            "Source Sentence": evt.get("reference sentence")
-        })
-
-
-    df = pd.DataFrame(rows)
-
-    st.subheader("📊 Extracted Adverse Events Table")
-    st.dataframe(df)
-
-    csv = df.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        label="⬇ Download CSV",
-        data=csv,
-        file_name="AE_extraction_output.csv",
-        mime="text/csv"
-    ) 
- 
- 
+if not st.session_state["logged_in"]:
+    login_page()
+else:
+    main_interface()
