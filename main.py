@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 import json
 import requests
 import streamlit as st
-
+import pandas as pd
 # =========================================
 # 🔹 Load Ontologies (HPO, OAE, MONDO)
 # =========================================
