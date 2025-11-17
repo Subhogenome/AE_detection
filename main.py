@@ -10,6 +10,7 @@ import json
 import requests
 import streamlit as st
 import pandas as pd
+import fitz
 # =========================================
 # 🔹 Load Ontologies (HPO, OAE, MONDO)
 # =========================================
