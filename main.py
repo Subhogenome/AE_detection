@@ -148,50 +148,39 @@ Text: {text}
 # 🔹 Step 3 — Adverse Event Identification
 # =========================================
 def identify_adverse_events(state: AgentState):
-    # If no drugs were extracted, return gracefully
-    if not state.drugs or len(state.drugs) == 0:
-        state.ae_raw = "No drugs detected"
-        return state
-
     text = state.input_text
 
-    # ---- YOUR ORIGINAL PROMPT (unchanged) ----
-    prompt = f"""
-You are a biomedical relation identifier.
+    causality_prompt = f"""
+You are an adverse event extraction agent.
+For each drug listed below, extract only the adverse events mentioned in the text.
+Include the exact sentence where the AE is mentioned.
+If a drug has no adverse events mentioned, use "Nan" for both the event and reference_sentence.
 
-Your task is to identify **only true adverse events (AEs)** that are **causally related** to each drug mentioned in the text.
+Output must be STRICT JSON using:
+[
+  {{
+    "drug": "DrugName",
+    "adverse_events": [
+      {{
+        "event": "EventName or Nan",
+        "reference_sentence": "Sentence from text or Nan"
+      }}
+    ]
+  }}
+]
 
-Guidelines:
-- Identify an AE **only if the text explicitly states or implies a cause–effect relationship** (e.g., "caused", "led to", "resulted in", "induced", "associated with").
-- If a drug and a symptom are both mentioned but not causally linked, output **None (None)** for that drug.
-- Do **not** infer relationships based on co-occurrence or background disease symptoms.
-- If uncertain, always output None (None). Err on the side of not linking.
+Do not include any extra text, explanation, or comments outside the JSON.
 
-Output format:
-Drug: <drug_name> -> <adverse_event_1> (sentence_1), <adverse_event_2> (sentence_2), ...
-If no AE is linked to a drug, output:
-Drug: <drug_name> -> None (None)
-
-Now analyze the following:
-Drugs: {state.drugs}
+Drugs:  {state.drugs}
 Text: {text}
 """
 
-    # ---- MODEL CALL ----
-    response = llm.invoke([HumanMessage(content=prompt)])
-    raw_output = response.content.strip()
 
-    # ---- CLEAN POSSIBLE NOISE (markdown fences, spacing, etc.) ----
-    cleaned = (
-        raw_output.replace("```json", "")
-                  .replace("```", "")
-                  .replace("**", "")
-                  .strip()
-    )
 
-    # ---- Store cleaned result for next pipeline stage ----
-    state.ae_raw = cleaned
+    response = llm.invoke([HumanMessage(content=causality_prompt)])
+    state.ae_raw = response.content.strip()
     return state
+
 
 
 
@@ -331,12 +320,8 @@ Return STRICT JSON (no markdown):
                 validated_events.append(content_json)
 
             # only append drugs that still have validated AE after filtering
-            true_ae_events = [e for e in validated_events if e.get("is_true_ae", "").upper() == "YES"]
-            if true_ae_events:
-              validated_output.append({
-        "drug": drug_name,
-        "validated_adverse_events": true_ae_events
-    })
+            if validated_events:
+                validated_output.append({"drug": drug_name, "validated_adverse_events": validated_events})
 
         state.result = validated_output
         return state
@@ -477,4 +462,4 @@ if "logged_in" not in st.session_state:
 if not st.session_state["logged_in"]:
     login_page()
 else:
-    main_interface()
+    main_interface() why didn't I get amlodipine reference sentence
