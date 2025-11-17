@@ -400,7 +400,23 @@ Return STRICT JSON ONLY:
 # =========================================
 # 🔹 Build Unified Pipeline
 # =========================================
+graph = StateGraph(AgentState)
+graph.add_node("classify", classify_relation)
+graph.add_node("extract_drugs", extract_drugs)
+graph.add_node("identify_aes", identify_adverse_events)
+graph.add_node("structure_json", structure_json_output)
+graph.add_node("map_ontology", map_ontology_terms)
+graph.add_node("validate_best", validate_and_select_best_ontology)
 
+graph.set_entry_point("classify")
+graph.add_edge("classify", "extract_drugs")
+graph.add_edge("extract_drugs", "identify_aes")
+graph.add_edge("identify_aes", "structure_json")
+graph.add_edge("structure_json", "map_ontology")
+graph.add_edge("map_ontology","validate_best")
+graph.add_edge("validate_best", END)
+
+pipeline = graph.compile()
 
 
 
