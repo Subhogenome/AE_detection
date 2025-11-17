@@ -151,27 +151,23 @@ def identify_adverse_events(state: AgentState):
     text = state.input_text
 
     causality_prompt = f"""
-You are an adverse event extraction agent.
-For each drug listed below, extract only the adverse events mentioned in the text.
-Include the exact sentence where the AE is mentioned.
-If a drug has no adverse events mentioned, use "Nan" for both the event and reference_sentence.
+You are a biomedical relation identifier.
 
-Output must be STRICT JSON using:
-[
-  {{
-    "drug": "DrugName",
-    "adverse_events": [
-      {{
-        "event": "EventName or Nan",
-        "reference_sentence": "Sentence from text or Nan"
-      }}
-    ]
-  }}
-]
+Your task is to identify **only true adverse events (AEs)** that are **causally related** to each drug mentioned in the text.
 
-Do not include any extra text, explanation, or comments outside the JSON.
+Guidelines:
+- Identify an AE **only if the text explicitly states or implies a cause–effect relationship** (e.g., "caused", "led to", "resulted in", "induced", "associated with").
+- If a drug and a symptom are both mentioned but not causally linked, output **None (None)** for that drug.
+- Do **not** infer relationships based on co-occurrence or background disease symptoms.
+- If uncertain, always output None (None). Err on the side of not linking.
 
-Drugs:  {state.drugs}
+Output format:
+Drug: <drug_name> -> <adverse_event_1> (sentence_1), <adverse_event_2> (sentence_2), ...
+If no AE is linked to a drug, output:
+Drug: <drug_name> -> None (None)
+
+Now analyze the following:
+Drugs: {state.drugs}
 Text: {text}
 """
 
