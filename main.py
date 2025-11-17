@@ -419,4 +419,77 @@ graph.add_edge("validate_best", END)
 pipeline = graph.compile()
 
 
+st.set_page_config(page_title="Automated Pharmacovigilance AE Extractor", layout="wide")
+st.title("📌 Automated Pharmacovigilance Adverse Event Extractor")
 
+# -------------------- Helper Function: Extract PDF Text --------------------
+def extract_text_from_pdf(pdf_file):
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    return text
+
+# -------------------- Helper Function: Convert Output → DataFrame --------------------
+def output_to_dataframe(result):
+
+    rows = []
+
+    for item in result:  
+        drug = item.get("drug")
+
+        for ae in item.get("validated_adverse_events", []):
+            rows.append({
+                "Drug": drug,
+                "Adverse Event": ae.get("event"),
+                "Classification": ae.get("is_true_ae"),
+                "Reference Sentence": ae.get("reference_sentence"),
+                "Best Ontology": (ae.get("best_ontology") or {}).get("ontology") if ae.get("best_ontology") else None,
+                "Ontology ID": (ae.get("best_ontology") or {}).get("id") if ae.get("best_ontology") else None,
+                "Ontology Label": (ae.get("best_ontology") or {}).get("name") if ae.get("best_ontology") else None,
+                "Similarity Score": (ae.get("best_ontology") or {}).get("similarity") if ae.get("best_ontology") else None
+            })
+
+    return pd.DataFrame(rows)
+
+# -------------------- UI Inputs --------------------
+uploaded_pdf = st.file_uploader("📄 Upload a PDF (Optional)", type=["pdf"])
+text_input = st.text_area("✍ Or paste raw text here", height=150)
+
+run_btn = st.button("🚀 Run AE Extraction")
+
+# -------------------- Execution Logic --------------------
+if run_btn:
+
+    if uploaded_pdf:
+        user_text = extract_text_from_pdf(uploaded_pdf)
+        st.success("PDF processed successfully.")
+    elif text_input.strip():
+        user_text = text_input.strip()
+    else:
+        st.error("❌ Please upload a PDF or enter text first.")
+        st.stop()
+
+    st.info("⏳ Running AI pipeline... Please wait.")
+
+    output = pipeline.invoke({"input_text": user_text})
+    result = output["result"]
+
+    # Convert to DataFrame
+    df = output_to_dataframe(result)
+
+    if df.empty:
+        st.warning("⚠ No adverse events detected.")
+    else:
+        st.subheader("📊 Extracted Adverse Events")
+        st.dataframe(df, use_container_width=True)
+
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="⬇ Download CSV",
+            data=csv,
+            file_name="ae_extraction_results.csv",
+            mime="text/csv"
+        )
+
+        st.success("🎉 Extraction complete.")
