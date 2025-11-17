@@ -151,24 +151,25 @@ def identify_adverse_events(state: AgentState):
     text = state.input_text
 
     causality_prompt = f"""
-You are a biomedical relation identifier.
+You are a biomedical NER (Named Entity Recognition) agent.
 
-Your task is to identify **only true adverse events (AEs)** that are **causally related** to each drug mentioned in the text.
+Task:
+Identify ONLY the drug names mentioned in the text below.
 
-Guidelines:
-- Identify an AE **only if the text explicitly states or implies a cause–effect relationship** (e.g., "caused", "led to", "resulted in", "induced", "associated with").
-- If a drug and a symptom are both mentioned but not causally linked, output **None (None)** for that drug.
-- Do **not** infer relationships based on co-occurrence or background disease symptoms.
-- If uncertain, always output None (None). Err on the side of not linking.
+Rules:
+- Return ONLY a JSON array of strings.
+- Include ONLY drugs, medications, active pharmaceutical ingredients, or therapeutic agents.
+- Exclude symptoms, diseases, procedures, foods, chemicals, or unrelated terms.
+- Use lowercase unless the drug normally uses capitalization (e.g., "Warfarin" → "warfarin").
+- Do NOT include duplicates.
+- Output must be valid JSON with no explanation or text outside the JSON array.
 
-Output format:
-Drug: <drug_name> -> <adverse_event_1> (sentence_1), <adverse_event_2> (sentence_2), ...
-If no AE is linked to a drug, output:
-Drug: <drug_name> -> None (None)
+Text:
+{text}
 
-Now analyze the following:
-Drugs: {state.drugs}
-Text: {text}
+Return format (strict JSON only):
+["drug1", "drug2"]
+
 """
 
 
