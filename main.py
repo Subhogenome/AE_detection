@@ -148,36 +148,50 @@ Text: {text}
 # 🔹 Step 3 — Adverse Event Identification
 # =========================================
 def identify_adverse_events(state: AgentState):
+    # If no drugs were extracted, return gracefully
+    if not state.drugs or len(state.drugs) == 0:
+        state.ae_raw = "No drugs detected"
+        return state
+
     text = state.input_text
 
-    causality_prompt = f"""
-You are a biomedical NER (Named Entity Recognition) agent.
+    # ---- YOUR ORIGINAL PROMPT (unchanged) ----
+    prompt = f"""
+You are a biomedical relation identifier.
 
-Task:
-Identify ONLY the drug names mentioned in the text below.
+Your task is to identify **only true adverse events (AEs)** that are **causally related** to each drug mentioned in the text.
 
-Rules:
-- Return ONLY a JSON array of strings.
-- Include ONLY drugs, medications, active pharmaceutical ingredients, or therapeutic agents.
-- Exclude symptoms, diseases, procedures, foods, chemicals, or unrelated terms.
-- Use lowercase unless the drug normally uses capitalization (e.g., "Warfarin" → "warfarin").
-- Do NOT include duplicates.
-- Output must be valid JSON with no explanation or text outside the JSON array.
+Guidelines:
+- Identify an AE **only if the text explicitly states or implies a cause–effect relationship** (e.g., "caused", "led to", "resulted in", "induced", "associated with").
+- If a drug and a symptom are both mentioned but not causally linked, output **None (None)** for that drug.
+- Do **not** infer relationships based on co-occurrence or background disease symptoms.
+- If uncertain, always output None (None). Err on the side of not linking.
 
-Text:
-{text}
+Output format:
+Drug: <drug_name> -> <adverse_event_1> (sentence_1), <adverse_event_2> (sentence_2), ...
+If no AE is linked to a drug, output:
+Drug: <drug_name> -> None (None)
 
-Return format (strict JSON only):
-["drug1", "drug2"]
-
+Now analyze the following:
+Drugs: {state.drugs}
+Text: {text}
 """
 
+    # ---- MODEL CALL ----
+    response = llm.invoke([HumanMessage(content=prompt)])
+    raw_output = response.content.strip()
 
+    # ---- CLEAN POSSIBLE NOISE (markdown fences, spacing, etc.) ----
+    cleaned = (
+        raw_output.replace("```json", "")
+                  .replace("```", "")
+                  .replace("**", "")
+                  .strip()
+    )
 
-    response = llm.invoke([HumanMessage(content=causality_prompt)])
-    state.ae_raw = response.content.strip()
+    # ---- Store cleaned result for next pipeline stage ----
+    state.ae_raw = cleaned
     return state
-
 
 
 
