@@ -8,7 +8,7 @@ from rdflib import Graph, URIRef
 from difflib import SequenceMatcher
 import json
 import requests
-import streamit as st
+import streamlit as st
 
 # =========================================
 # 🔹 Load Ontologies (HPO, OAE, MONDO)
