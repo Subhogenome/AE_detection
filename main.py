@@ -312,6 +312,16 @@ def validate_and_select_best_ontology(state: AgentState):
 
             # --- Case: Drug with NO AE -> skip entirely ---
             if not d.get("adverse_events"):
+                validated_events.append({
+                        "event": event_name,
+                        "reference_sentence": ref_sentence,
+                        "is_true_ae": None,
+                        "best_ontology": None,
+                        "alternate_ontologies": [],
+                        "reasoning_summary": (
+                            "NO AE found"
+                        )
+                    })
                 continue
 
             for ae in d.get("adverse_events", []):
