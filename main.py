@@ -20,7 +20,7 @@ print("Loading ontologies...")
 try:
  hpo = Ontology("http://purl.obolibrary.org/obo/hp.obo")
 except:
-    continue
+    pass
 
 # --- OAE ---
 OAE_URL = "https://raw.githubusercontent.com/OAE-ontology/OAE/master/src/oae_merged.owl"
