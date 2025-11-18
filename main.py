@@ -492,7 +492,7 @@ if run_btn:
 
     # Convert to DataFrame
     df = output_to_dataframe(result)
-
+    df.drop("Classification",axis=1,inplace=True)
     if df.empty:
         st.warning("⚠ No adverse events detected.")
     else:
