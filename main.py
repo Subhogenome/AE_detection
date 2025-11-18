@@ -44,10 +44,10 @@ try:
  mondo = Ontology(MONDO_FILE)
 except:
  pass
-print(f"HPO terms: {len(list(hpo.terms()))}")
-print(f"OAE triples: {len(oae)}")
-print(f"MONDO terms: {len(list(mondo.terms()))}")
-print("Ontologies loaded successfully.\n")
+#print(f"HPO terms: {len(list(hpo.terms()))}")
+#print(f"OAE triples: {len(oae)}")
+#print(f"MONDO terms: {len(list(mondo.terms()))}")
+#print("Ontologies loaded successfully.\n")
 
 
 # =========================================
