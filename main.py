@@ -183,6 +183,10 @@ A relationship counts as causal if ANY of the following appear:
 - Clinical reasoning phrases: "linked to", "attributed to", "associated with", "likely due to", "suspected to be caused by"
 - Pharmacovigilance evidence: "temporal association", "rechallenge reproduced", "dechallenge improved"
 - Case report certainty language: "confirmed", "determined", "consistent with", "known side effect"
+-If the input includes table rows , treat rows as causal IF they contain:
+  - A drug name AND an AE name  
+ - OR an AE name under a drug-specific adverse event table section  
+ -  AND optionally frequency, grade, severity, or % occurrence 
 
 If **no causal relationship exists** for a drug, return an empty list for that drug.
 
