@@ -17,7 +17,10 @@ import fitz
 print("Loading ontologies...")
 
 # --- HPO ---
-hpo = Ontology("http://purl.obolibrary.org/obo/hp.obo")
+try:
+ hpo = Ontology("http://purl.obolibrary.org/obo/hp.obo")
+except:
+    continue
 
 # --- OAE ---
 OAE_URL = "https://raw.githubusercontent.com/OAE-ontology/OAE/master/src/oae_merged.owl"
