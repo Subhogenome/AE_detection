@@ -50,55 +50,68 @@ def normalize_term(term: str):
 
 
 def find_in_all_ontologies(term, top_n=10):
-    """Find top N close matches across HPO, OAE, and MONDO ontologies."""
+    """Find top N close matches across HPO, OAE, and MONDO ontologies without failing if one crashes."""
     term_norm = normalize_term(term)
     matches = []
 
     # --- HPO ---
-    for t in hpo.terms():
-        if not t.name:
-            continue
-        name_norm = normalize_term(t.name)
-        ratio = SequenceMatcher(None, term_norm, name_norm).ratio()
-        if ratio > 0.65:
-            matches.append({
-                "ontology": "HPO",
-                "id": t.id,
-                "name": t.name,
-                "similarity": round(ratio, 3)
-            })
+    try:
+        for t in hpo.terms():
+            if not t.name:
+                continue
+            name_norm = normalize_term(t.name)
+            ratio = SequenceMatcher(None, term_norm, name_norm).ratio()
+            if ratio > 0.65:
+                matches.append({
+                    "ontology": "HPO",
+                    "id": t.id,
+                    "name": t.name,
+                    "similarity": round(ratio, 3)
+                })
+    except Exception as e:
+        print(f"Error processing HPO ontology: {e}")
 
     # --- OAE ---
-    for s, p, o in oae.triples((None, URIRef("http://www.w3.org/2000/01/rdf-schema#label"), None)):
-        name = str(o)
-        name_norm = normalize_term(name)
-        ratio = SequenceMatcher(None, term_norm, name_norm).ratio()
-        if ratio > 0.65:
-            matches.append({
-                "ontology": "OAE",
-                "id": str(s),
-                "name": name,
-                "similarity": round(ratio, 3)
-            })
+    try:
+        for s, p, o in oae.triples((None, URIRef("http://www.w3.org/2000/01/rdf-schema#label"), None)):
+            name = str(o)
+            name_norm = normalize_term(name)
+            ratio = SequenceMatcher(None, term_norm, name_norm).ratio()
+            if ratio > 0.65:
+                matches.append({
+                    "ontology": "OAE",
+                    "id": str(s),
+                    "name": name,
+                    "similarity": round(ratio, 3)
+                })
+    except Exception as e:
+        print(f"Error processing OAE ontology: {e}")
 
     # --- MONDO ---
-    for t in mondo.terms():
-        if not t.name:
-            continue
-        name_norm = normalize_term(t.name)
-        ratio = SequenceMatcher(None, term_norm, name_norm).ratio()
-        if ratio > 0.65:
-            matches.append({
-                "ontology": "MONDO",
-                "id": t.id,
-                "name": t.name,
-                "similarity": round(ratio, 3)
-            })
+    try:
+        for t in mondo.terms():
+            if not t.name:
+                continue
+            name_norm = normalize_term(t.name)
+            ratio = SequenceMatcher(None, term_norm, name_norm).ratio()
+            if ratio > 0.65:
+                matches.append({
+                    "ontology": "MONDO",
+                    "id": t.id,
+                    "name": t.name,
+                    "similarity": round(ratio, 3)
+                })
+    except Exception as e:
+        print(f"Error processing MONDO ontology: {e}")
 
+    # Sort matches by similarity score in descending order
     matches.sort(key=lambda x: -x["similarity"])
+
+    # Return top N matches, or a default message if no matches were found
     return matches[:top_n] if matches else [
         {"ontology": None, "id": None, "name": "Not found", "similarity": 0}
     ]
+
 
 
 # =========================================
