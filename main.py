@@ -37,11 +37,13 @@ except Exception as e:
 # --- MONDO ---
 MONDO_URL = "http://purl.obolibrary.org/obo/mondo.obo"
 MONDO_FILE = "mondo.obo"
-r = requests.get(MONDO_URL)
-with open(MONDO_FILE, "wb") as f:
+try:
+ r = requests.get(MONDO_URL)
+ with open(MONDO_FILE, "wb") as f:
     f.write(r.content)
-mondo = Ontology(MONDO_FILE)
-
+ mondo = Ontology(MONDO_FILE)
+except:
+ pass
 print(f"HPO terms: {len(list(hpo.terms()))}")
 print(f"OAE triples: {len(oae)}")
 print(f"MONDO terms: {len(list(mondo.terms()))}")
