@@ -22,7 +22,7 @@ hpo = Ontology("http://purl.obolibrary.org/obo/hp.obo")
 # --- OAE ---
 OAE_URL = "https://raw.githubusercontent.com/OAE-ontology/OAE/master/src/oae_merged.owl"
 OAE_FILE = "oae_merged.owl"
-r = requests.get(OAE_URL)
+#r = requests.get(OAE_URL)
 with open(OAE_FILE, "wb") as f:
     f.write(r.content)
 oae = Graph()
