@@ -492,11 +492,12 @@ if run_btn:
 
     # Convert to DataFrame
     df = output_to_dataframe(result)
-    df.drop("Classification",axis=1,inplace=True)
+    
     if df.empty:
         st.warning("⚠ No adverse events detected.")
     else:
         st.subheader("📊 Extracted Adverse Events")
+        df.drop("Classification",axis=1,inplace=True)
         st.dataframe(df, use_container_width=True)
 
         csv = df.to_csv(index=False).encode("utf-8")
